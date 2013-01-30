@@ -612,9 +612,9 @@ namespace Tinkerforge
 						}
 						else
 						{
-							if(devices.ContainsKey(packet.LongUID))
+							if(devices.ContainsKey((long)packet.UID))
 							{
-                                Device device = devices[packet.LongUID];
+                                Device device = devices[(long)packet.UID];
                                 Device.CallbackWrapper wrapper = device.callbackWrappers[packet.FunctionID];
 								if(wrapper != null)
 								{
@@ -635,13 +635,13 @@ namespace Tinkerforge
 				return;
 			}
 
-			if(!devices.ContainsKey(packet.LongUID))
+            if (!devices.ContainsKey((long)packet.UID))
 			{
 				// Response from an unknown device, ignoring it
 				return;
 			}
 
-            Device device = devices[packet.LongUID];
+            Device device = devices[(long)packet.UID];
 
 			if(packet.SequenceNumber == 0) {
 				Device.CallbackWrapper wrapper = device.callbackWrappers[packet.FunctionID];
@@ -706,7 +706,7 @@ namespace Tinkerforge
 
         private byte[] Data;
 
-        public long LongUID
+        private long LongUID
         {
             get
             {
@@ -718,7 +718,7 @@ namespace Tinkerforge
         {
             get
             {
-                throw new NotImplementedException();
+                return new UID(LongUID);
             }
             private set
             {
@@ -817,6 +817,12 @@ namespace Tinkerforge
     {
         private string StringRepresentation;
         private long LongRepresentation;
+
+        public UID(long uid)
+        {
+            LongRepresentation = uid;
+            StringRepresentation = Base58.Encode(uid);
+        }
 
         public UID(string uid)
         {
