@@ -466,7 +466,7 @@ namespace Tinkerforge
 						break;
 					}
 
-					length = GetLengthFromData(pendingData);
+					length = new Packet(pendingData).Length;
 
 					if(pendingLength < length)
 					{
@@ -474,12 +474,12 @@ namespace Tinkerforge
 						break;
 					}
 
-					byte[] packet = new byte[length];
+					byte[] packetData = new byte[length];
 
-					Array.Copy(pendingData, 0, packet, 0, length);
+					Array.Copy(pendingData, 0, packetData, 0, length);
 					Array.Copy(pendingData, length, pendingData, 0, pendingLength - length);
 					pendingLength -= length;
-					HandleResponse(packet);
+					HandleResponse(new Packet(packetData));
 				}
 			}
 		}
@@ -586,10 +586,9 @@ namespace Tinkerforge
 							continue;
 						}
 
-						byte fid = GetFunctionIdFromData(cqo.data);
-						long uid = GetUIDFromData(cqo.data);
+                        var packet = new Packet(cqo.data);
 
-						if(fid == CALLBACK_ENUMERATE)
+						if(packet.FunctionID == CALLBACK_ENUMERATE)
 						{
 							var enumHandler = EnumerateCallback;
 							if(enumHandler != null)
@@ -613,10 +612,10 @@ namespace Tinkerforge
 						}
 						else
 						{
-							if(devices.ContainsKey(uid))
+							if(devices.ContainsKey(packet.LongUID))
 							{
-								Device device = devices[uid];
-								Device.CallbackWrapper wrapper = device.callbackWrappers[fid];
+                                Device device = devices[packet.LongUID];
+                                Device.CallbackWrapper wrapper = device.callbackWrappers[packet.FunctionID];
 								if(wrapper != null)
 								{
 									wrapper(cqo.data);
@@ -628,66 +627,37 @@ namespace Tinkerforge
 			}
 		}
 
-
-		private static byte GetFunctionIdFromData(byte[] data)
+		private void HandleResponse(Packet packet)
 		{
-			return data[5];
-		}
-
-		private static int GetLengthFromData(byte[] data)
-		{
-			return data[4];
-		}
-
-		internal static long GetUIDFromData(byte[] data)
-		{
-			return (long)(((long)data[0]) & 0xFF) | (long)((((long)data[1]) & 0xFF) << 8) | (long)((((long)data[2]) & 0xFF) << 16) | (long)((((long)data[3]) & 0xFF) << 24);
-		}
-
-		private static byte GetSequenceNumberFromData(byte[] data) {
-			return (byte)((((int)data[6]) >> 4) & 0x0F);
-		}
-
-		internal static byte GetErrorCodeFromData(byte[] data) {
-			return (byte)(((int)(data[7] >> 6)) & 0x03);
-		}
-
-		private void HandleResponse(byte[] packet)
-		{
-			byte functionID = GetFunctionIdFromData(packet);
-			byte sequenceNumber = GetSequenceNumberFromData(packet);
-
-			if(sequenceNumber == 0 && functionID == CALLBACK_ENUMERATE)
+			if(packet.SequenceNumber == 0 && packet.FunctionID == CALLBACK_ENUMERATE)
 			{
-				callbackQueue.Enqueue(new CallbackQueueObject(QUEUE_PACKET, packet));
+				callbackQueue.Enqueue(new CallbackQueueObject(QUEUE_PACKET, packet.GetAllBytes()));
 				return;
 			}
 
-			long uid = GetUIDFromData(packet);
-
-			if(!devices.ContainsKey(uid))
+			if(!devices.ContainsKey(packet.LongUID))
 			{
 				// Response from an unknown device, ignoring it
 				return;
 			}
 
-			Device device = devices[uid];
+            Device device = devices[packet.LongUID];
 
-			if(sequenceNumber == 0) {
-				Device.CallbackWrapper wrapper = device.callbackWrappers[functionID];
+			if(packet.SequenceNumber == 0) {
+				Device.CallbackWrapper wrapper = device.callbackWrappers[packet.FunctionID];
 
 				if(wrapper != null)
 				{
-					callbackQueue.Enqueue(new CallbackQueueObject(QUEUE_PACKET, packet));
+					callbackQueue.Enqueue(new CallbackQueueObject(QUEUE_PACKET, packet.GetAllBytes()));
 				}
 
 				return;
 			}
 
-			if(functionID == device.expectedResponseFunctionID &&
-			   sequenceNumber == device.expectedResponseSequenceNumber)
+			if(packet.FunctionID == device.expectedResponseFunctionID &&
+			   packet.SequenceNumber == device.expectedResponseSequenceNumber)
 			{
-				device.responseQueue.Enqueue(packet);
+				device.responseQueue.Enqueue(packet.GetAllBytes());
 				return;
 			}
 
@@ -729,6 +699,119 @@ namespace Tinkerforge
 		{
 		}
 	}
+
+    internal class Packet
+    {
+        public const byte HeaderSize = 8;
+
+        private byte[] Data;
+
+        public long LongUID
+        {
+            get
+            {
+                return (long)(((long)Data[0]) & 0xFF) | (long)((((long)Data[1]) & 0xFF) << 8) | (long)((((long)Data[2]) & 0xFF) << 16) | (long)((((long)Data[3]) & 0xFF) << 24);
+            }
+        }
+
+        public UID UID
+        {
+            get
+            {
+                throw new NotImplementedException();
+            }
+            private set
+            {
+                LEConverter.To((long)value, 0, Data);
+            }
+        }
+
+        public byte Length
+        {
+            get
+            {
+                return Data[4];
+            }
+            private set
+            {
+                Data[4] = value;
+            }
+        }
+
+        public byte FunctionID
+        {
+            get
+            {
+                return Data[5];
+            }
+            private set
+            {
+                Data[5] = value;
+            }
+        }
+
+        public int SequenceNumber
+        {
+            get
+            {
+                return (byte)((((int)Data[6]) >> 4) & 0x0F);
+            }
+            private set
+            {
+                Data[6] = (byte)((value << 4) | (Data[6] & 0x0F));
+            }
+        }
+
+        public bool ResponseExpected
+        {
+            get
+            {
+                return (((Data[6]) >> 3) & 0x01) == 1;
+            }
+            private set
+            {
+                byte flag = (byte)(value ? 1 : 0);
+                Data[6] = (byte)((flag << 3) | (Data[6] & 0xF7));
+            }
+        }
+
+        public byte ErrorCode
+        {
+            get
+            {
+                return (byte)(((int)(Data[7] >> 6)) & 0x03);
+            }
+            private set
+            {
+                Data[7] = (byte)((value << 6) | (Data[7] & 0x3F));
+            }
+        }
+
+        public Packet(byte[] data)
+        {
+            Data = data;
+        }
+
+        public Packet(UID uid, byte payloadLength, byte functionId, int sequenceNumber, bool responseExpected)
+        {
+            Data = new byte[payloadLength + HeaderSize];
+            UID = uid;
+            Length = (byte)Data.Length;
+            FunctionID = functionId;
+            SequenceNumber = sequenceNumber;
+            ResponseExpected = responseExpected;
+        }
+
+        public byte[] GetAllBytes()
+        {
+            return Data;
+        }
+
+        public override string ToString()
+        {
+            return string.Format("Packet(\"{0}\" fn: {1} seq: {2} resp: {3} err: {4})[{5}]", "uid", FunctionID, SequenceNumber, ResponseExpected, ErrorCode, Length);
+        }
+    }
 
     public struct UID
     {
@@ -929,21 +1012,8 @@ namespace Tinkerforge
 
 		protected byte[] MakePacketHeader(byte length, byte fid)
 		{
-			byte[] packet = new byte[length];
-			LEConverter.To((long)this.internalUID, 0, packet);
-			LEConverter.To((byte)length, 4, packet);
-			LEConverter.To((byte)fid, 5, packet);
-			if(GetResponseExpected(fid))
-			{
-				LEConverter.To((byte)((1 << 3) | (ipcon.GetNextSequenceNumber() << 4)), 6, packet);
-			}
-			else
-			{
-				LEConverter.To((byte)((ipcon.GetNextSequenceNumber() << 4)), 6, packet);
-			}
-			LEConverter.To((byte)0, 7, packet);
-
-			return packet;
+            var packet = new Packet(internalUID, (byte)(length - Packet.HeaderSize), fid, ipcon.GetNextSequenceNumber(), GetResponseExpected(fid));
+            return packet.GetAllBytes();
 		}
 
 		protected void SendRequestNoResponse(byte[] request)
@@ -981,7 +1051,7 @@ namespace Tinkerforge
 				expectedResponseFunctionID = 0;
 				expectedResponseSequenceNumber = 0;
 
-				byte errorCode = IPConnection.GetErrorCodeFromData(response);
+                byte errorCode = new Packet(response).ErrorCode;
 				switch(errorCode)
 				{
 					case 0:
