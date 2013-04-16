@@ -807,9 +807,37 @@ namespace Tinkerforge
             return Data;
         }
 
+        public byte[] GetPayloadCopy()
+        {
+            byte[] payload = new byte[Length - HeaderSize];
+            Array.Copy(Data, HeaderSize, payload, 0, Length - HeaderSize);
+            return payload;
+        }
+
         public override string ToString()
         {
-            return string.Format("Packet(\"{0}\" fn: {1} seq: {2} resp: {3} err: {4})[{5}]", "uid", FunctionID, SequenceNumber, ResponseExpected, ErrorCode, Length);
+            return string.Format("Packet(\"{0}\" fn: {1} seq: {2} resp: {3} err: {4})[{5}]", UID, FunctionID, SequenceNumber, ResponseExpected, ErrorCode, Length);
+        }
+
+        public static Packet CreateWithCopy(byte[] buffer, int offset, int length)
+        {
+            byte[] packetBuffer = new byte[length];
+            Array.Copy(buffer, offset, packetBuffer, 0, length);
+            return new Packet(packetBuffer);
+        }
+
+        public static IEnumerable<Packet> CreateAllCopies(byte[] buffer)
+        {
+            for (int offset = 0; offset < buffer.Length; offset++)
+            {
+                var tempPacket = CreateWithCopy(buffer, offset, buffer.Length - offset);
+                if (tempPacket.Length == 0)
+                {
+                    break;
+                }
+                yield return CreateWithCopy(buffer, offset, tempPacket.Length);
+                offset += tempPacket.Length - 1;
+            }
         }
     }
 
